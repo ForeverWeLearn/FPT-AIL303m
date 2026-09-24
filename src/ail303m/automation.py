@@ -22,11 +22,73 @@ FEATURES = [
     "quality",
     "type",
     "is_white",
+    "total_acidity",
+    "volatile_to_fixed_ratio",
+    "citric_to_total_acid_ratio",
+    "bound_sulfur_dioxide",
+    "free_so2_proportion",
+    "sugar_to_alcohol_ratio",
+    "sugar_to_acid_ratio",
+    "alcohol_total_acid_product",
+    "free_so2_per_pH",
 ]
+FEATURES_SET: dict[str, list[str]] = {
+    "all_original": [
+        "alcohol",
+        "fixed acidity",
+        "volatile acidity",
+        "citric acid",
+        "density",
+        "residual sugar",
+        "chlorides",
+        "free sulfur dioxide",
+        "total sulfur dioxide",
+        "pH",
+        "sulphates",
+        "is_white",
+    ],
+    "selected": [
+        "is_white",
+    ],
+    "all_extras": [
+        "alcohol",
+        "citric acid",
+        "density",
+        "is_white",
+        "total_acidity",
+        "volatile_to_fixed_ratio",
+        "citric_to_total_acid_ratio",
+        "bound_sulfur_dioxide",
+        "free_so2_proportion",
+        "sugar_to_alcohol_ratio",
+        "sugar_to_acid_ratio",
+        "alcohol_total_acid_product",
+        "free_so2_per_pH",
+    ],
+}
+report = pd.DataFrame(columns=["model", "loss", "accuracy", "features_set"])
 
 
 def featuring(df: pd.DataFrame) -> pd.DataFrame:
     df["is_white"] = (df["type"] == "white").astype(np.float32)
+
+    df["total_acidity"] = df["fixed acidity"] + df["volatile acidity"]
+    df["volatile_to_fixed_ratio"] = df["volatile acidity"] / (
+        df["fixed acidity"] + 1e-5
+    )
+    df["citric_to_total_acid_ratio"] = df["citric acid"] / (df["total_acidity"] + 1e-5)
+
+    df["bound_sulfur_dioxide"] = df["total sulfur dioxide"] - df["free sulfur dioxide"]
+    df["free_so2_proportion"] = df["free sulfur dioxide"] / (
+        df["total sulfur dioxide"] + 1e-5
+    )
+
+    df["sugar_to_alcohol_ratio"] = df["residual sugar"] / (df["alcohol"] + 1e-5)
+    df["sugar_to_acid_ratio"] = df["residual sugar"] / (df["total_acidity"] + 1e-5)
+
+    df["alcohol_total_acid_product"] = df["alcohol"] * df["total_acidity"]
+    df["free_so2_per_pH"] = df["free sulfur dioxide"] / (df["pH"] + 1e-5)
+
     return df
 
 
@@ -42,6 +104,31 @@ def get_train_val(df: pd.DataFrame, features: list[str]) -> tuple:
     return X_train_scaled, X_val_scaled, y_train, y_val
 
 
+def build_god_model(num_features: int):
+    inputs = keras.Input(shape=(num_features,))
+    
+    x = layers.Dense(64, activation="relu")(inputs)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.2)(x)
+    
+    x = layers.Dense(32, activation="relu")(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.2)(x)
+    
+    x = layers.Dense(16, activation="relu")(x)
+    
+    outputs = layers.Dense(1, activation="linear")(x)
+    
+    model = keras.Model(inputs=inputs, outputs=outputs, name="wife")
+    model.compile(
+        loss=keras.losses.MeanSquaredError(),
+        optimizer=keras.optimizers.Adam(learning_rate=0.001),
+        metrics=["mean_absolute_error", "root_mean_squared_error"],
+    )
+    
+    return model
+
+
 def build_elasticnet_model(num_features: int):
     inputs = keras.Input(shape=(num_features,), name="input_features")
     outputs = layers.Dense(
@@ -52,7 +139,7 @@ def build_elasticnet_model(num_features: int):
     )(inputs)
     model = keras.Model(inputs=inputs, outputs=outputs, name="ElasticNet_Baseline")
     model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=0.01),
+        optimizer=keras.optimizers.Adam(learning_rate=0.002),
         loss="mean_squared_error",
         metrics=["mae", keras.metrics.RootMeanSquaredError(name="rmse")],
     )
@@ -147,19 +234,22 @@ def train(
     )
 
 
-def val(model: keras.Model, X_val, y_val):
-    scores = model.evaluate(X_val, y_val, verbose=2)
+def val(model: keras.Model, X_val, y_val) -> tuple[float, float]:
+    scores = model.evaluate(X_val, y_val, verbose="2")
     print("Val loss:", scores[0])
     print("Val accuracy:", scores[1])
+    return scores[0], scores[1]
 
 
-def submit(model: keras.Model, X, ids):
+def submit(model: keras.Model, X, ids, file_identity: str):
     y = model(X)
     df = pd.DataFrame({"id": ids, "quality": np.round(y[..., 0]).astype(int)})
-    # df.to_csv(get_incremental_path("submit/wife.csv"), index=False)
+    df.to_csv(get_incremental_path(f"submit/wife-{file_identity}.csv"), index=False)
 
 
-def run_with_features(features: list[str]):
+def run_with_features_set(features_set: str):
+    features = FEATURES_SET[features_set]
+
     train_df = pd.read_csv("data/train.csv", sep=";")
     infer_df = pd.read_csv("data/test.csv", sep=";")
 
@@ -170,34 +260,28 @@ def run_with_features(features: list[str]):
     X_infer = infer_df[features]
 
     num_features = len(features)
-    models: list[keras.Model] = [
-        build_elasticnet_model(num_features),
-        build_resnet_mlp(num_features),
-        build_neural_tree_model(num_features),
-    ]
+    how_fast = 1
+    models: dict[str, tuple[keras.Model, int, int]] = {
+        "god": (build_god_model(num_features), int(50 * how_fast), 32),
+        "elasticnet": (build_elasticnet_model(num_features), int(50 * how_fast), 64),
+        "resnet_mlp": (build_resnet_mlp(num_features), int(100 * how_fast), 64),
+        "decision_tree": (build_neural_tree_model(num_features), int(80 * how_fast), 64),
+    }
 
-    for model in models:
-        train(model, X_train, X_val, y_train, y_val, 10, 64)
-        val(model, X_val, y_val)
-        submit(model, X_infer, infer_df["id"])
+    for name, model in models.items():
+        train(model[0], X_train, X_val, y_train, y_val, model[1], model[2])
+
+        loss, accuracy = val(model[0], X_val, y_val)
+        report.loc[len(report)] = [name, loss, accuracy, features_set]
+
+        submit(model[0], X_infer, infer_df["id"], f"{name}-{features_set}")
 
 
 def main():
-    features = [
-        "alcohol",
-        "fixed acidity",
-        "volatile acidity",
-        "citric acid",
-        "density",
-        "residual sugar",
-        "chlorides",
-        "free sulfur dioxide",
-        "total sulfur dioxide",
-        "pH",
-        "sulphates",
-        "is_white",
-    ]
-    run_with_features(features)
+    for features_set in FEATURES_SET:
+        run_with_features_set(features_set)
+
+    print(report)
 
 
 if __name__ == "__main__":
