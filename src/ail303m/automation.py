@@ -1,3 +1,5 @@
+import os
+
 import keras
 import numpy as np
 import pandas as pd
@@ -214,6 +216,8 @@ def run_with_features_set(features_set: str):
 
 
 def main():
+    os.makedirs("./submit", exist_ok=True)
+    
     for features_set in FEATURES_SET:
         run_with_features_set(features_set)
 
