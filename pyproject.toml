@@ -10,6 +10,7 @@ requires-python = ">=3.13"
 dependencies = [
     "ipykernel>=7.3.0",
     "keras>=3.15.1",
+    "matplotlib>=3.11.2",
     "pandas>=3.0.6",
     "pydot>=4.0.1",
     "scikit-learn>=1.9.1",
@@ -20,6 +21,8 @@ dependencies = [
 [project.scripts]
 main = "ail303m.main:main"
 auto = "ail303m.automation:main"
+sk = "ail303m.sk:main"
+forest = "ail303m.forest:main"
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]
