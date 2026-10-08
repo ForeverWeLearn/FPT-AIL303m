@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from ail303m.utils import get_incremental_path
 import keras
 import numpy as np
 import pandas as pd
@@ -208,11 +209,11 @@ def main():
     print(f"Using '{best_name}' strategy (val acc {candidates[best_name][0]:.4f})")
     test_final = candidates[best_name][1]
 
-    out_path = DATA_DIR / "submission.csv"
+    out_path = get_incremental_path(str(DATA_DIR / "submission.csv"))
     with open(out_path, "w") as f:
-        f.writelines(["id, quality"])
+        f.writelines(["id,quality\n"])
         for test_id, q in zip(test["id"], test_final):
-            f.writelines([f"{int(test_id)}, {int(q)}"])
+            f.writelines([f"{int(test_id)},{int(q)}\n"])
     print(f"Saved predictions to {out_path}")
 
 
